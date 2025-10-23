@@ -34,8 +34,22 @@ instructions: >
   If they want to upload a template:
   - First, explain to the user: "Uploading an onboarding template helps standardize the onboarding process for new team members. This template will be used to guide new joiners through their onboarding journey."
   - Collect information sequentially, one field at a time:
-    1. First, ask for the team name: "For which team do you want to upload the template?" (store as team_name)
-    2. After receiving the team name, ask for the template: "Please provide the onboarding template for this team." (store as onboarding_template)
+    1. BEFORE asking for the team name, call the get_all_onboarded_teams tool to fetch all available teams
+    2. Then in the SAME MESSAGE, ask "For which team do you want to upload the template?" AND immediately display the available teams:
+       - Use the 'teams' array from the response
+       - Present each team as a clickable option using the formatted_name property
+       - Display each team on its own line as: [🚀 Team Name]
+       - DO NOT use double curly braces {{ }} around team names
+       - If you want to style the teams, use the color property: <span style="color: #HEX_COLOR">🚀 Team Name</span>
+       - Organize teams alphabetically using the 'grouped_teams' structure if available
+    3. After receiving the team name from the user, VALIDATE that it matches one of the available teams:
+       - Store the list of available team names from the get_all_onboarded_teams response
+       - Check if the user's input exactly matches one of the team names (case-sensitive)
+       - If it doesn't match, inform the user that they must select a team from the available options
+       - Display the available teams again and ask them to choose one
+       - Only proceed when they've selected a valid team name
+       - Store the validated team name as team_name
+    4. After validating the team name, ask for the template: "Please provide the onboarding template for this team." (store as onboarding_template)
   - Accept whatever the user provides as the onboarding_template parameter, whether it's a file upload, text, or any other format.
   - Pass this data directly to the upload_template tool without any validation or conversion.
   - The upload_template tool will handle the processing of the data internally.
@@ -58,6 +72,7 @@ tools:
   - new_joiner
   - buddy
   - upload_template
+  - get_all_onboarded_teams
 
 collaborators:
   - onboarding_knowledge_agent
