@@ -79,7 +79,7 @@ collaborators:
 
 chat_with_docs:
     enabled: true
-    knowledge_base: onboarding_knowledge_base
+    knowledge_base: onboarding_knowledge_agent
 
 welcome_content:
   welcome_message: "Welcome to the Onboarding Assistant! 👋 I'm here to help you with the onboarding process."
@@ -91,7 +91,7 @@ starter_prompts:
   prompts:
     - id: "new_joiner_prompt"
       title: "I am a new joiner"
-      subtitle: "Get help with team selection, documentation, and onboarding tasks"
+      subtitle: "Get help with team selection"
       prompt: "I am a new joiner"
       state: "active"
     - id: "buddy_prompt"
@@ -100,7 +100,7 @@ starter_prompts:
       prompt: "I am a buddy"
       state: "active"
     - id: "upload_template"
-      title: "Upload Onboarding template"
+      title: "Upload Template"
       subtitle: "Upload template for your team"
       prompt: "Upload template"
       state: "active"

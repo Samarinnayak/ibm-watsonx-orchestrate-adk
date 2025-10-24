@@ -9,8 +9,7 @@ orchestrate agents remove -n onboarding_agent -k native
 orchestrate agents remove -n onboarding_knowledge_agent -k native
 
 # Remove tools
-orchestrate tools remove -k python -n new_joiner
-orchestrate tools remove -k python -n buddy
-
-# Remove knowledge base
-orchestrate knowledge-bases remove -n onboarding_knowledge_base
+orchestrate tools remove  -n new_joiner
+orchestrate tools remove  -n buddy
+orchestrate tools remove  -n upload_template
+orchestrate tools remove  -n get_all_onboarded_teams

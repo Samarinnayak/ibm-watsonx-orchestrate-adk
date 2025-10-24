@@ -4,8 +4,6 @@ set -x
 orchestrate env activate local
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
-# Import knowledge base
-orchestrate knowledge-bases import -f ${SCRIPT_DIR}/knowledge_base/onboarding_knowledge_base.yaml
 
 # Import tools
 for python_tool in onboarding/new_joiner.py onboarding/buddy.py onboarding/upload_template.py onboarding/get_all_onboarded_teams.py; do

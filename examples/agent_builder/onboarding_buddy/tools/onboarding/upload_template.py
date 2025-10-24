@@ -8,7 +8,7 @@ import requests
 # MongoDB connection
 API_KEY="C3ePfiQHqD_PbHuo6rHivG1fDa_AgOcqMdmzHOawUyi1"
 BUCKET_NAME="hacker-01"
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://khushboo110597_db_user:iYHpCXn8bTSZYEFT@onboardingassistant.ijmnyjp.mongodb.net/?tlsAllowInvalidCertificates=true")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://samarinnayak_db_user:X2oKA5U7eUkh9IsW@onboarding-assistant.ekljrwh.mongodb.net/?tlsAllowInvalidCertificates=true")
 
 # Connect to MongoDB Atlas
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)

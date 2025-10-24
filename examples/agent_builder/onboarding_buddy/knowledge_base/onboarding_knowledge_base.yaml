@@ -1,9 +1,0 @@
-spec_version: v1
-name: onboarding_knowledge_base
-description: Knowledge base for onboarding new employees and supporting buddies
-type: file_system
-file_system:
-  path: examples/agent_builder/onboarding_buddy/knowledge_base
-  file_types:
-    - xlsx
-  recursive: true
