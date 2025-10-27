@@ -6,7 +6,6 @@ from pymongo import MongoClient
 import os
 
 # MongoDB connection
-API_KEY="C3ePfiQHqD_PbHuo6rHivG1fDa_AgOcqMdmzHOawUyi1"
 MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://khushboo110597_db_user:iYHpCXn8bTSZYEFT@onboardingassistant.ijmnyjp.mongodb.net/?tlsAllowInvalidCertificates=true")
 
 # Connect to MongoDB Atlas
@@ -123,49 +122,3 @@ def get_all_onboarded_teams() -> dict:
     }
 
 # Example of how an agent would parse and display this data on UI
-"""
-UI RENDERING GUIDE:
-
-When the agent receives the response from get_all_onboarded_teams(), it can render the teams in multiple ways:
-
-1. CARD GRID VIEW (suggested default):
-   - Create a grid of cards, each representing a team
-   - Each card uses the team's color as background or border
-   - Display the team icon and name prominently
-   - Example HTML/CSS for a single team card:
-   
-   <div class="team-card" style="border-color: {{team.color}}; background: linear-gradient(to bottom right, white, {{team.accent_color}}10)">
-     <div class="team-icon">{{team.icon}}</div>
-     <h3 class="team-name">{{team.name}}</h3>
-   </div>
-
-2. ALPHABETICAL GROUPS:
-   - Display teams grouped by their first letter
-   - Use the grouped_teams data structure
-   - Example rendering:
-   
-   <div class="alphabet-section">
-     <h2 class="letter-heading">A</h2>
-     <div class="team-list">
-       <!-- Teams starting with A -->
-       <div class="team-item" style="color: {{team.color}}">
-         <span class="team-icon">{{team.icon}}</span>
-         <span class="team-name">{{team.name}}</span>
-       </div>
-     </div>
-   </div>
-
-3. LIST VIEW:
-   - Simple list with team icons and names
-   - Color-coded by team theme
-   - Example:
-   
-   <ul class="team-list">
-     <li class="team-item" style="border-left: 4px solid {{team.color}}">
-       <span class="team-icon">{{team.icon}}</span>
-       <span class="team-name">{{team.name}}</span>
-     </li>
-   </ul>
-
-The agent can switch between these views based on user preference or screen size.
-"""

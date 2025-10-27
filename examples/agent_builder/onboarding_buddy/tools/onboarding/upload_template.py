@@ -1,14 +1,21 @@
 from typing import Dict, Optional
 from enum import Enum
+from typing_extensions import LiteralString
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 from pymongo import MongoClient
 import os
 import requests
+import pathlib
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # MongoDB connection
 API_KEY="C3ePfiQHqD_PbHuo6rHivG1fDa_AgOcqMdmzHOawUyi1"
 BUCKET_NAME="hacker-01"
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://samarinnayak_db_user:X2oKA5U7eUkh9IsW@onboarding-assistant.ekljrwh.mongodb.net/?tlsAllowInvalidCertificates=true")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://khushboo110597_db_user:iYHpCXn8bTSZYEFT@onboardingassistant.ijmnyjp.mongodb.net/?tlsAllowInvalidCertificates=true")
 
 # Connect to MongoDB Atlas
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
@@ -17,21 +24,36 @@ client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
 db = client["buddy_db"]
 
 @tool
-def upload_template(team_name: str, onboarding_template) -> dict:
+def upload_template(team_name: str, file_content:bytes) -> dict:
     """
     Tool for buddies to upload the onboarding template of their respective team.
     
     Args:
         team_name: Name of the team for which you want to upload template.
-        onboarding_template: Content of the onboarding template (can be string or bytes).
+        file_content: Binary content of the Excel template file.
+        file_extension: Extension of the file (default: .xlsx)
     Returns:
         A dict having status as key and value as a message
     """
-    # Check if onboarding_template is a string and convert to bytes if needed
-    if isinstance(onboarding_template, str):
+    # Handle different types of input
+    input_type = type(file_content).__name__
+    msg = f"Received file of type: {input_type}. "
+    
+    # Handle different types of input
+    if isinstance(file_content, str):
+        # If it's a string that looks like a file reference (e.g., "file")
+        if file_content.strip().lower() == "file":
+            return {
+                "status": "error",
+                "error": "Invalid file content",
+                "message": "Received a file reference instead of actual file content. Please ensure you're uploading the actual Excel file.",
+                "error_code": "FILE_REFERENCE_ERROR"
+            }
+        
         try:
             # Try to convert string to bytes
-            onboarding_template = onboarding_template.encode('utf-8')
+            file_content = file_content.encode('utf-8')
+            msg += f"Converted string to bytes, size: {len(file_content)} bytes. "
         except Exception as e:
             return {
                 "status": "error",
@@ -41,15 +63,32 @@ def upload_template(team_name: str, onboarding_template) -> dict:
             }
     
     # Ensure we have bytes
-    if not isinstance(onboarding_template, bytes):
+    if not isinstance(file_content, bytes):
         return {
             "status": "error",
             "error": "Invalid data type",
-            "message": f"Expected bytes, got {type(onboarding_template).__name__}",
+            "message": f"Expected bytes, got {input_type}. Please ensure you're uploading a valid Excel file.",
             "error_code": "TYPE_ERROR"
         }
+
     
-    url, msg = upload_to_ibm_cos(team_name, onboarding_template)
+    # Add file size information to message
+    msg += f"Processing file content of size: {len(file_content)} bytes. "
+    warning_msg = ""
+    
+    
+    # Upload to IBM COS
+    url, cos_msg = upload_to_ibm_cos(team_name, file_content)
+    
+    # Combine messages
+    full_msg = msg + cos_msg
+    
+    # Add warning to message if present
+    if warning_msg:
+        full_msg = warning_msg + full_msg
+    
+    # Use the combined message going forward
+    msg = full_msg
     
     # Update the template URL in the database
     if url:
@@ -83,9 +122,20 @@ def get_ibm_iam_access_token() -> str:
         raise Exception(f"Failed to obtain access token: {response.status_code} {response.text}")
 
 
-def upload_to_ibm_cos(file_name,data):
+def upload_to_ibm_cos(file_name, data):
     access_token = get_ibm_iam_access_token()
-    content_type = "text/plain"
+    
+    # Determine content type based on file extension or content
+    if file_name.lower().endswith('.xlsx'):
+        content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif file_name.lower().endswith('.xls'):
+        content_type = "application/vnd.ms-excel"
+    elif file_name.lower().endswith('.csv'):
+        content_type = "text/csv"
+    else:
+        # Default to binary if we can't determine the type
+        content_type = "application/octet-stream"
+    
     url = f"https://s3.us-west.cloud-object-storage.test.appdomain.cloud/{BUCKET_NAME}/{file_name}"
     headers = {
         "Content-Type": content_type,
