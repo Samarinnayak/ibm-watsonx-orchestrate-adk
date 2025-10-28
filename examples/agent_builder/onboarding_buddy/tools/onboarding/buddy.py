@@ -5,7 +5,7 @@ from pymongo import MongoClient
 import os
 
 # Use MongoDB Atlas instead of local MongoDB
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://khushboo110597_db_user:iYHpCXn8bTSZYEFT@onboardingassistant.ijmnyjp.mongodb.net/?tlsAllowInvalidCertificates=true")
+MONGO_URI = os.getenv("MONGO_URI", "")
 
 # Connect with a timeout
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
