@@ -6,7 +6,7 @@ from pymongo import MongoClient
 import os
 
 # MongoDB connection
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://khushboo110597_db_user:iYHpCXn8bTSZYEFT@onboardingassistant.ijmnyjp.mongodb.net/?tlsAllowInvalidCertificates=true")
+MONGO_URI = os.getenv("MONGO_URI", "")
 
 # Connect to MongoDB Atlas
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
