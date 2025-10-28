@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # MongoDB connection
-API_KEY="C3ePfiQHqD_PbHuo6rHivG1fDa_AgOcqMdmzHOawUyi1"
+API_KEY=""
 BUCKET_NAME="hacker-01"
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://khushboo110597_db_user:iYHpCXn8bTSZYEFT@onboardingassistant.ijmnyjp.mongodb.net/?tlsAllowInvalidCertificates=true")
+MONGO_URI = os.getenv("MONGO_URI", "")
 
 # Connect to MongoDB Atlas
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
