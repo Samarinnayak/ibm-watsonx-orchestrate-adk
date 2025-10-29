@@ -1,56 +1,94 @@
+from io import BytesIO
 from typing import List, Dict, Optional, Any
 from enum import Enum
 from dataclasses import dataclass
 import os
+import requests
 import pandas as pd
 import httpx
-import asyncio
+from pymongo import MongoClient
 from dotenv import load_dotenv
-
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 
-# Load environment variables
-# Try to load from different possible locations
+MONGO_URI = os.getenv("MONGO_URI", "")
+# Connect to MongoDB Atlas
+client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
+
+# Use a database in MongoDB Atlas
+db = client["buddy_db"]
+
+# Get current directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
-env_paths = [
-    os.path.join(current_dir, '.env'),  # Current directory
-    os.path.join(os.path.dirname(current_dir), '.env'),  # Parent directory
-    os.path.join(os.path.dirname(os.path.dirname(current_dir)), '.env'),  # Grandparent directory
-    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(current_dir))), '.env'),  # Great-grandparent directory
-    '.env'  # Root directory
-]
 
-env_loaded = False
-for env_path in env_paths:
-    if os.path.exists(env_path):
-        load_dotenv(env_path)
-        print(f"Loaded .env from {env_path}")
-        env_loaded = True
-        break
+# Try to load the GitHub token from the .env file in the onboarding_buddy directory
+onboarding_buddy_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(current_dir))), 'onboarding_buddy')
+onboarding_env_path = os.path.join(onboarding_buddy_dir, '.env')
+if os.path.exists(onboarding_env_path):
+    load_dotenv(onboarding_env_path)
+    print(f"Loaded .env from {onboarding_env_path}")
 
-if not env_loaded:
-    print("Warning: Could not find .env file")
-    load_dotenv()  # Try default loading as fallback
-
-# GitHub API configuration
-# Set GitHub token directly
+# Get GitHub token from environment or use hardcoded value as fallback
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_API_URL = "https://api.github.com/repos/Samarinnayak/project_buddy_test_1/issues"
+REPO = "TestRepo"
+GITHUB_API_URL = f"https://api.github.com/repos/Samarinnayak/project_buddy_test_1/issues"
 HEADERS = {
     "Authorization": f"token {GITHUB_TOKEN}",
     "Accept": "application/vnd.github+json"
 }
 
 
-class Team(str, Enum):
-    ENGINEER = 'Engineer'
-    PRODUCT = 'Product'
-    DESIGN = 'Design'
-    MARKETING = 'Marketing'
-    SALES = 'Sales'
-    CUSTOMER_SUPPORT = 'Customer Support'
-    HUMAN_RESOURCES = 'Human Resources'
+def fetch_file_url(team_name):
+    collection = db["team_data"]
+    team_doc = collection.find_one(
+    {"team_name": team_name},
+    {"template_id": 1})
+    print(team_doc)
+    if team_doc:
+        return team_doc["template_id"]
+    else:
+        print("Template not found")
 
+
+async def read_task_from_excel(csv_file):
+    df = pd.read_excel(csv_file, sheet_name="onboarding_template", header=0)
+    payloads = []
+    task_types = df['Task Type'].dropna().unique()
+    for task_type in task_types:
+            task_df = df[df['Task Type'] == task_type]
+            if task_df.empty:
+                continue
+            body = await format_task_body(task_df)
+
+            payload = {
+                "title": task_type.strip(),
+                "body": body,
+            }
+            payloads.append(payload)
+    return payloads
+
+async def format_task_body(task_df):
+    formatted_rows = []
+    for _, row in task_df.iterrows():
+        task_name = row['Task Name'].strip() if pd.notna(row['Task Name']) else ""
+        task_info = row['Task Info'].strip() if pd.notna(row['Task Info']) else ""
+        task_links = row['Task Related Links'].strip() if pd.notna(row['Task Related Links']) else ""
+        task_duration = row['Task Duration'].strip() if pd.notna(row['Task Duration']) else ""
+        additional_info = row['Additional Information'].strip() if pd.notna(row['Additional Information']) else ""
+
+        # Format the row as a checklist item
+        line = f"- [ ] **{task_name}**"
+        if task_duration:
+            line += f" ({task_duration})"
+        if task_info:
+            line += f"\n      {task_info}"
+        if task_links:
+            line += f"\n      🔗 [Link]({task_links})"
+        if additional_info:
+            line += f"\n      {additional_info}"
+
+        formatted_rows.append(line)
+
+    return "\n\n".join(formatted_rows)
 
 @dataclass
 class Document:
@@ -68,7 +106,7 @@ class GitHubTask:
 
 
 @tool
-def new_joiner(action: str, team: Optional[str] = None, query: Optional[str] = None) -> Dict:
+def new_joiner(action: str, team: Optional[str] = None, query: Optional[str] = None) -> dict:
     """
     Tool for new joiners to get information about teams, documentation, and create GitHub tasks.
     
@@ -81,35 +119,67 @@ def new_joiner(action: str, team: Optional[str] = None, query: Optional[str] = N
         A dictionary containing the requested information
     """
     # Convert string team name to Team enum if provided
-    team_enum = None
-    if team:
-        try:
-            # Try to find the matching team enum
-            for t in Team:
-                if t.value == team:
-                    team_enum = t
-                    break
-        except Exception:
-            pass
     
+    collection = db["team_data"]
     if action == "list_teams":
-        # Return teams in a format that can be rendered as selectable options
-        selectable_teams = []
-        for team in Team:
-            selectable_teams.append({
-                "name": team.value,
-                "id": team.value,
-                "selectable": True
-            })
+
+        # Try to get teams from database
+        team_names = []  # Start with default teams
+        try:
+            print("DEBUG: Attempting to connect to database...")
+            
+            db_team_names = collection.distinct("team_name")
+            print(f"DEBUG: Raw DB response: {db_team_names}")
+            
+            # If teams found in database, use them instead of defaults
+            if db_team_names and len(db_team_names) > 0:
+                team_names = db_team_names
+                print(f"DEBUG: Found {len(team_names)} teams in database: {team_names}")
+            else:
+                print("DEBUG: No teams found in database, using default teams")
+        except Exception as e:
+            # If there's an error with the database query, use default values as fallback
+            print(f"DEBUG: Error retrieving team names from database: {str(e)}")
+            print("DEBUG: Using default teams instead")
+        
+        print(f"DEBUG: Final team_names list: {team_names}")
         
         # Create a formatted message with team options that look like buttons
-        # Format each team as a separate line with a button-like appearance
-        team_buttons = "\n".join([f"[{team.value}]" for team in Team])
+        team_buttons = []
+        for team_name in team_names:
+            button = f"[{team_name}]"
+            team_buttons.append(button)
+            print(f"DEBUG: Added button: {button}")
         
-        return {
+        # Join the team buttons with line breaks
+        team_buttons_text = "\n".join(team_buttons)
+        
+        # Create a more visually appealing message with clear instructions
+        message = "Please select one of the following teams by clicking or typing the team name:\n\n"
+        message += team_buttons_text
+        
+        # For debugging
+        print(f"DEBUG: Team buttons list: {team_buttons}")
+        print(f"DEBUG: Final formatted message: \n{message}")
+        
+        # Create selectable teams for the response
+        selectable_teams = []
+        for team_name in team_names:
+            team_obj = {
+                "name": team_name,
+                "id": team_name,
+                "selectable": True
+            }
+            selectable_teams.append(team_obj)
+            print(f"DEBUG: Added selectable team: {team_obj}")
+        
+        response = {
             "teams": selectable_teams,
-            "message": f"Please select one of the following teams by clicking or typing the team name:\n\n{team_buttons}"
+            "message": message
         }
+        
+        print(f"DEBUG: Final response object: {response}")
+        return response
     
     if not team:
         return {
@@ -121,311 +191,99 @@ def new_joiner(action: str, team: Optional[str] = None, query: Optional[str] = N
     team_name = team
     
     if action == "get_docs":
-        # Get the knowledge base directory
-        knowledge_base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                                        "knowladge_base")
-        
-        # Dynamically load team-specific Excel file
+        buddy_name = ""
+        buddy_email = ""
+        buddy_github_username = ""
+        # Return a default response for get_docs action
         try:
-            # Construct the file path based on team name
-            team_file_name = f"{team_name}.xlsx"
-            excel_path = os.path.join(knowledge_base_dir, team_file_name)
-            
-            # If team-specific file doesn't exist, try the Example.xlsx as fallback
-            if not os.path.exists(excel_path):
-                excel_path = os.path.join(knowledge_base_dir, "Example.xlsx")
-                
-            # Read Excel file if it exists
-            if os.path.exists(excel_path):
-                try:
-                    # Read Excel file
-                    df = pd.read_excel(excel_path)
-                    
-                    # Convert Excel data to documents
-                    team_docs = []
-                    for _, row in df.iterrows():
-                        if 'Title' in df.columns and 'Content' in df.columns:
-                            title = row['Title'] if not pd.isna(row['Title']) else "Untitled Document"
-                            content = row['Content'] if not pd.isna(row['Content']) else "No content available"
-                            url = row['URL'] if 'URL' in df.columns and not pd.isna(row['URL']) else None
-                            
-                            team_docs.append(Document(
-                                title=title,
-                                content=content,
-                                url=url
-                            ))
-                    
-                    if team_docs:
-                        # Use documents from Excel file
-                        docs = team_docs
-                    else:
-                        # Fallback to default documents if Excel file is empty
-                        docs = [
-                            Document(
-                                title=f"{team_name} Onboarding Guide (Default)",
-                                content=f"This is a default guide as the Excel file was empty for {team_name} team.",
-                                url=f"https://example.com/{team_name.lower()}-onboarding"
-                            )
-                        ]
-                except Exception as e:
-                    # Fallback to default documents if there's an error reading the Excel file
-                    docs = [
-                        Document(
-                            title=f"{team_name} Onboarding Guide (Default)",
-                            content=f"This is a default guide. Error reading Excel file: {str(e)}",
-                            url=f"https://example.com/{team_name.lower()}-onboarding"
-                        )
-                    ]
-            else:
-                # Fallback to default documents if Excel file doesn't exist
-                docs = [
-                    Document(
-                        title=f"{team_name} Onboarding Guide (Default)",
-                        content=f"This is a default guide as no Excel file was found for {team_name} team.",
-                        url=f"https://example.com/{team_name.lower()}-onboarding"
-                    )
-                ]
-        except Exception as e:
-            # Fallback to default documents if there's any error
-            docs = [
-                Document(
-                    title=f"{team_name} Onboarding Guide (Default)",
-                    content=f"This is a default guide. Error: {str(e)}",
-                    url=f"https://example.com/{team_name.lower()}-onboarding"
-                )
-            ]
-            
-        return {
-            "documents": [{"title": doc.title, "url": doc.url, "content_preview": doc.content[:100] + "..."} for doc in docs],
-            "message": f"Here are the documents for the {team_name} team. These resources will help you get started and understand the team's processes."
-        }
-    
-    elif action == "create_tasks":
-        # Get the knowledge base directory
-        knowledge_base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                                        "knowladge_base")
-        
-        # Dynamically load team-specific Excel file for tasks
-        try:
-            # Construct the file path based on team name
-            team_file_name = f"{team_name}.xlsx"
-            excel_path = os.path.join(knowledge_base_dir, team_file_name)
-            
-            # If team-specific file doesn't exist, try the Example.xlsx as fallback
-            if not os.path.exists(excel_path):
-                excel_path = os.path.join(knowledge_base_dir, "Example.xlsx")
-                
-            # Read Excel file if it exists
-            if os.path.exists(excel_path):
-                try:
-                    # Read Excel file - following ProjectBuddyApp approach
-                    df = pd.read_excel(excel_path, sheet_name="FinalSheet", header=0)
-                    
-                    # Group tasks by Task Type
-                    task_types = df['Task Type'].dropna().unique() if 'Task Type' in df.columns else []
-                    
-                    if len(task_types) > 0:
-                        # Create GitHub tasks from Excel data
-                        github_tasks = []
-                        
-                        for task_type in task_types:
-                            task_df = df[df['Task Type'] == task_type]
-                            if task_df.empty:
-                                continue
-                            
-                            # Format tasks as checklist items
-                            for _, row in task_df.iterrows():
-                                task_name = row['Task Name'].strip() if 'Task Name' in row and pd.notna(row['Task Name']) else "Untitled Task"
-                                task_info = row['Task Info'].strip() if 'Task Info' in row and pd.notna(row['Task Info']) else ""
-                                task_links = row['Task Related Links'].strip() if 'Task Related Links' in row and pd.notna(row['Task Related Links']) else ""
-                                task_duration = row['Task Duration'].strip() if 'Task Duration' in row and pd.notna(row['Task Duration']) else ""
-                                additional_info = row['Additional Information'].strip() if 'Additional Information' in row and pd.notna(row['Additional Information']) else ""
-                                
-                                # Build description with markdown formatting
-                                description = f"**{task_name}**"
-                                if task_duration:
-                                    description += f" ({task_duration})"
-                                if task_info:
-                                    description += f"\n{task_info}"
-                                if task_links:
-                                    description += f"\n🔗 [Link]({task_links})"
-                                if additional_info:
-                                    description += f"\n{additional_info}"
-                                
-                                github_tasks.append(GitHubTask(
-                                    title=f"{task_type}: {task_name}",
-                                    description=description,
-                                    assignee="new_joiner",
-                                    status="To Do"
-                                ))
-                        
-                        if github_tasks:
-                            # Use tasks from Excel file
-                            specific_tasks = github_tasks
-                        else:
-                            # Fallback to default tasks if Excel file has no valid tasks
-                            specific_tasks = [
-                                GitHubTask(
-                                    title=f"Set up {team_name} environment (Default)",
-                                    description=f"Install required tools and configure your local environment for {team_name} team.",
-                                    assignee="new_joiner",
-                                    status="To Do"
-                                )
-                            ]
-                    else:
-                        # Fallback to default tasks if Excel file has no Task Type column
-                        specific_tasks = [
-                            GitHubTask(
-                                title=f"Set up {team_name} environment (Default)",
-                                description=f"Install required tools and configure your local environment for {team_name} team.",
-                                assignee="new_joiner",
-                                status="To Do"
-                            )
-                        ]
-                except Exception as e:
-                    # Fallback to default tasks if there's an error reading the Excel file
-                    specific_tasks = [
-                        GitHubTask(
-                            title=f"Set up {team_name} environment (Default)",
-                            description=f"Install required tools and configure your local environment for {team_name} team. (Error reading Excel: {str(e)})",
-                            assignee="new_joiner",
-                            status="To Do"
-                        )
-                    ]
-            else:
-                # Fallback to default tasks if Excel file doesn't exist
-                specific_tasks = [
-                    GitHubTask(
-                        title=f"Set up {team_name} environment (Default)",
-                        description=f"Install required tools and configure your local environment for {team_name} team. (Excel file not found)",
-                        assignee="new_joiner",
-                        status="To Do"
-                    )
-                ]
-        except Exception as e:
-            # Fallback to default tasks if there's any error
-            specific_tasks = [
-                GitHubTask(
-                    title=f"Set up {team_name} environment (Default)",
-                    description=f"Install required tools and configure your local environment for {team_name} team. (Error: {str(e)})",
-                    assignee="new_joiner",
-                    status="To Do"
-                )
-            ]
-        
-        # Add common tasks for all teams
-        common_tasks = [
-            GitHubTask(
-                title=f"Complete {team_name} onboarding checklist",
-                description=f"Go through the {team_name} onboarding checklist and mark items as completed.",
-                assignee="new_joiner",
-                status="To Do"
-            ),
-            GitHubTask(
-                title="Schedule 1:1 meetings with team members",
-                description="Schedule introductory 1:1 meetings with all team members.",
-                assignee="new_joiner",
-                status="To Do"
-            ),
-            GitHubTask(
-                title="Complete company-wide orientation",
-                description="Attend the company-wide orientation session for new employees.",
-                assignee="new_joiner",
-                status="To Do"
+            print(f"DEBUG: Attempting to find team {team_name} in database")
+            team_doc = collection.find_one(
+                {"team_name": team_name},
+                {"_id": 0, "buddy_name": 1, "buddy_email": 1, "buddy_github_username": 1}
             )
-        ]
-        
-        # Combine specific and common tasks
-        all_tasks = specific_tasks + common_tasks
-        
-        # Create GitHub issues via the API if token is available
-        created_issues = []
-        # Debug information about GitHub token
-        token_status = "available" if GITHUB_TOKEN else "missing"
-        print(f"GitHub token status: {token_status}")
-        print(f"GitHub API URL: {GITHUB_API_URL}")
-        
-        if GITHUB_TOKEN:
-            try:
-                # Create GitHub issues asynchronously
-                for task in all_tasks:
-                    # Prepare issue data
-                    issue_data = {
-                        "title": task.title,
-                        "body": task.description,
-                        # "assignees": ["new_joiner"],  # Optional: must be a collaborator in the repo
-                    }
-                    
-                    # Make synchronous POST request to GitHub API
-                    response = httpx.post(GITHUB_API_URL, json=issue_data, headers=HEADERS)
-                    
-                    if response.status_code == 201:
-                        issue = response.json()
-                        issue_url = issue.get("html_url", "No URL available")
-                        created_issues.append({
-                            "title": task.title,
-                            "url": issue_url,
-                            "status": "Created"
-                        })
-                    else:
-                        created_issues.append({
-                            "title": task.title,
-                            "error": f"Failed to create: {response.status_code}",
-                            "status": "Failed"
-                        })
-            except Exception as e:
-                # If there's an error with the GitHub API, just return the tasks without creating issues
-                task_links_message = ""
-                if created_issues:
-                    # Check if any issues were successfully created (have URLs)
-                    successful_issues = [issue for issue in created_issues if "url" in issue]
-                    if successful_issues:
-                        task_links_message = "\n\n**GitHub Task Links (partial):**\n"
-                        for issue in successful_issues:
-                            task_links_message += f"- [{issue['title']}]({issue['url']})\n"
-                
-                message = f"GitHub tasks have been prepared for your onboarding to the {team_name} team, but could not be created in GitHub due to an error: {str(e)}"
-                message += task_links_message
-                
-                return {
-                    "tasks": [{"title": task.title, "description": task.description, "status": task.status} for task in all_tasks],
-                    "message": message
-                }
-        
-        # Return both the tasks and created issues
-        task_links_message = ""
-        permission_error = False
-        
-        if created_issues:
-            # Check if any issues were successfully created (have URLs)
-            successful_issues = [issue for issue in created_issues if "url" in issue]
-            failed_issues = [issue for issue in created_issues if "error" in issue]
             
-            if successful_issues:
-                task_links_message = "\n\n**GitHub Task Links:**\n"
-                for issue in successful_issues:
-                    task_links_message += f"- [{issue['title']}]({issue['url']})\n"
+            print(f"DEBUG: Database response: {team_doc}")
             
-            # Check if we had authentication, permission, or not found errors
-            if failed_issues and all(("401" in issue.get("error", "") or "403" in issue.get("error", "") or "404" in issue.get("error", "")) for issue in failed_issues):
-                permission_error = True
+            if team_doc:
+                if "buddy_name" in team_doc and team_doc["buddy_name"]:
+                    buddy_name = team_doc["buddy_name"]
+                    print(f"DEBUG: Found buddy name: {buddy_name}")
+                else:
+                    print("DEBUG: buddy_name field missing or empty")
+                    
+                if "buddy_email" in team_doc and team_doc["buddy_email"]:
+                    buddy_email = team_doc["buddy_email"]
+                    print(f"DEBUG: Found buddy email: {buddy_email}")
+                else:
+                    print("DEBUG: buddy_email field missing or empty")
+                    
+                if "buddy_github_username" in team_doc and team_doc["buddy_github_username"]:
+                    buddy_github_username = team_doc["buddy_github_username"]
+                    print(f"DEBUG: Found buddy github username: {buddy_github_username}")
+                else:
+                    print("DEBUG: buddy_github_username field missing or empty")
+            else:
+                print(f"DEBUG: Team {team_name} not found in database")
+        except Exception as e:
+            print(f"DEBUG: Error retrieving team data from database: {str(e)}")
         
-        message = f"GitHub tasks have been prepared for your onboarding to the {team_name} team."
-        if not GITHUB_TOKEN:
-            message += " However, the GitHub token is missing. Please set the GITHUB_TOKEN environment variable to create GitHub issues."
-        elif permission_error:
-            message += " However, the tasks could not be created in GitHub due to authentication, permission, or repository issues. Please check your GitHub token, repository permissions, and repository existence."
-        else:
-            message += f" These tasks are based on the team's specific documentation and requirements."
+        # Create the welcome message with the buddy information
+        message = f"🎉 Welcome to the **{team_name}** team!\n\n"
+        message += f"Your onboarding buddy is **{buddy_name}**, and their W3 ID is `{buddy_email}`.\n\n"
+        message += f"They'll help you get settled in — don't hesitate to reach out!"
         
-        message += task_links_message
+        print(f"DEBUG: Final message: {message}")
         
         return {
-            "tasks": [{"title": task.title, "description": task.description, "status": task.status} for task in all_tasks],
-            "created_issues": created_issues if created_issues else None,
+            "buddy_name": buddy_name,
+            "buddy_email": buddy_email,
+            "buddy_github_username": buddy_github_username,
             "message": message
         }
     
+    elif action == "create_tasks":
+        try:
+            success_messages = []
+            error_messages = []
+            file_url = fetch_file_url(team_name)
+        #     if file_url:
+        #         onboarding_excel = fetch_file_from_cos(file_url)
+        #         item_lists = await read_task_from_excel(onboarding_excel)
+        #         with httpx.AsyncClient() as client:
+        #             # Create issues asynchronously
+        #             for task in item_lists:
+        #                 issue_data = {
+        #                     "title": task["title"],
+        #                     "body": task["body"],
+        #                     # "assignees": [username],  # Optional: must be a collaborator in the repo
+        #                 }
+                        
+        #                 # Asynchronous POST request to GitHub API
+        #                 response = await client.post(GITHUB_API_URL, json=issue_data, headers=HEADERS)
+                        
+        #                 if response.status_code == 201:
+        #                     issue = response.json()
+        #                     issue_url = issue.get("html_url", "No URL available")  # Get the URL of the created issue
+        #                     success_message = f"Issue '{issue_url}' created successfully."
+        #                     print(success_message)
+        #                     success_messages.append(success_message)
+        #                 else:
+        #                     error_message = f"Failed to create issue '{task['title']}': {response.json()}"
+        #                     print(error_message)
+        #                     error_messages.append(error_message)
+
+            return {
+                "message": "Tasks have been created in GitHub",
+                "status": "success",
+                "success_messages": success_messages,
+                "error_messages": error_messages
+            }
+        except Exception as e:
+            return {
+                "error": "Failed to create tasks",
+                "message": f"An error occurred while creating tasks: {str(e)}"
+            }
+
     elif action == "ask_question":
         if not query:
             return {
@@ -504,3 +362,4 @@ def new_joiner(action: str, team: Optional[str] = None, query: Optional[str] = N
             "error": "Invalid action",
             "message": "Please specify a valid action: list_teams, get_docs, create_tasks, or ask_question."
         }
+    
